@@ -1,0 +1,81 @@
+# docker-compose.yml
+# Khởi tạo PostgreSQL (analytics_db), MySQL (agentic_bi) và Trino Coordinator
+# trên cùng một Docker network. Trino truy cập PostgreSQL bằng hostname postgres-db
+# và MySQL bằng hostname mysql. Catalog nằm trong ./catalog.
+
+services:
+  postgres-db:
+    image: postgres:16
+    container_name: secure-bi-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: analytics_db
+      POSTGRES_USER: bi_user
+      POSTGRES_PASSWORD: securepassword
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    networks:
+      - bi-network
+      # Gắn container này vào một mạng ảo tên là bi-network.
+
+  mysql:
+    image: mysql:8.4
+    container_name: secure-bi-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpass
+      MYSQL_DATABASE: agentic_bi
+      MYSQL_USER: bi_agent
+      MYSQL_PASSWORD: bi_agent_pass
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+    ports:
+      - "13306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./docker/mysql/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-prootpass"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+    networks:
+      - bi-network
+
+  trino-coordinator:
+    image: trinodb/trino:latest
+    container_name: secure-bi-trino
+    restart: unless-stopped
+    depends_on:
+      postgres-db:
+        condition: service_started
+      mysql:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./catalog:/etc/trino/catalog:ro
+    networks:
+      - bi-network
+
+volumes:
+  postgres_data:
+  mysql_data:
+
+networks:
+  bi-network:
+    driver: bridge
+    # sử dụng bridge driver, tạo một mạng LAN ảo nội bộ để các container giao tiếp với nhau bằng hostname (ví dụ: ping postgres-db).
+
+# Cách chạy:
+#   docker compose up -d
+# Truy cập Trino tại http://localhost:8080.
+# Dừng hệ thống:
+#   docker compose down
+# Xóa dữ liệu PostgreSQL và MySQL:
+#   docker compose down -v
